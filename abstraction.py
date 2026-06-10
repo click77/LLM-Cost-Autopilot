@@ -14,3 +14,112 @@ class Response:
     latency_seconds: float    # High-precision round-trip wall-clock time
     cost: float               # Calculated total request cost in absolute USD
     model_id: str             # The exact model identifier that fulfilled the request
+
+# Lazy import initialization pattern to keep your execution footprint clean
+_openai_client = None
+_anthropic_client = None
+
+def _get_openai_client():
+    global _openai_client
+    if _openai_client is None:
+        from openai import OpenAI
+        # Expects OPENAI_API_KEY environment variable to be set
+        _openai_client = OpenAI()
+    return _openai_client
+
+def _get_anthropic_client():
+    global _anthropic_client
+    if _anthropic_client is None:
+        from anthropic import Anthropic
+        # Expects ANTHROPIC_API_KEY environment variable to be set
+        _anthropic_client = Anthropic()
+    return _anthropic_client
+
+
+def send_request(prompt: str, model_config: ModelConfig) -> Response:
+    """
+    Executes an explicit, non-streaming request against the specified provider.
+    Normalizes text outputs, token usage, execution time, and total cost into 
+    a single standardized Response object.
+    """
+    provider = model_config.provider.lower()
+    
+    # Initialize baseline metrics tracking variables
+    output_text = ""
+    input_tokens = 0
+    output_tokens = 0
+    
+    # Start high-precision wall-clock timer
+    start_time = time.perf_counter()
+    
+    try:
+        # --- CASE 1: OPENAI INFRASTRUCTURE ---
+        if provider == "openai":
+            client = _get_openai_client()
+            api_response = client.chat.completions.create(
+                model=model_config.model_id,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.0  # Kept deterministic for consistent cost/routing evaluation
+            )
+            output_text = api_response.choices[0].message.content or ""
+            input_tokens = api_response.usage.prompt_tokens
+            output_tokens = api_response.usage.completion_tokens
+            
+        # --- CASE 2: ANTHROPIC INFRASTRUCTURE ---
+        elif provider == "anthropic":
+            client = _get_anthropic_client()
+            api_response = client.messages.create(
+                model=model_config.model_id,
+                max_tokens=4096,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.0
+            )
+            output_text = api_response.content[0].text
+            input_tokens = api_response.usage.input_tokens
+            output_tokens = api_response.usage.output_tokens
+            
+        # --- CASE 3: LOCAL OLLAMA CONTAINER INFRASTRUCTURE ---
+        elif provider == "ollama":
+            # Direct HTTP execution avoids dependency collision and maps to standard local serving
+            url = "http://localhost:11434/api/chat"
+            payload = {
+                "model": model_config.model_id,
+                "messages": [{"role": "user", "content": prompt}],
+                "options": {"temperature": 0.0},
+                "stream": False
+            }
+            
+            # 30-second boundary timeout protects proxy thread pool health
+            native_res = requests.post(url, json=payload, timeout=30.0)
+            native_res.raise_for_status()
+            data = native_res.json()
+            
+            output_text = data["message"]["content"]
+            # Quirks handling: Ollama uses alternative naming conventions for token usage tracking
+            input_tokens = data.get("prompt_eval_count", 0)
+            output_tokens = data.get("eval_count", 0)
+            
+        else:
+            raise ValueError(f"Unsupported routing provider configuration: {provider}")
+            
+    except Exception as e:
+        # In a production router, you will connect this to your Phase 3 escalation engine.
+        # For now, we raise clean tracing exceptions.
+        raise RuntimeError(f"Abstraction Engine failed on provider {provider} via model {model_config.model_id}. Error: {str(e)}")
+        
+    # Stop high-precision wall-clock timer
+    end_time = time.perf_counter()
+    latency_seconds = end_time - start_time
+    
+    # Calculate exact micro-dollar pricing using the model configuration's embedded algorithm
+    total_cost = model_config.calculate_cost(input_tokens, output_tokens)
+    
+    # Package and return the final standardized payload interface contract
+    return Response(
+        output_text=output_text.strip(),
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        latency_seconds=latency_seconds,
+        cost=total_cost,
+        model_id=model_config.model_id
+    )
