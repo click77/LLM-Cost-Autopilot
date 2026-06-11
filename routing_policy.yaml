@@ -1,0 +1,43 @@
+# ====================================================================
+# COST AUTOPILOT CONFIGURATION: TIER-TO-MODEL ROUTING POLICY MAP
+# ====================================================================
+# Decouples the complexity classifier from the downstream API targets.
+# Hot-swap models during live performance audits without restarting application layers.
+
+version: "1.0.0"
+last_modified: "2026-06-11T10:57:00Z"
+
+# Quality Tier Mappings as specified in Phase 2, Step 4 Blueprint
+routing_map:
+  1:
+    tier_name: "Tier 1 - Low Complexity"
+    description: "Reformatting, key-value extraction, basic Q&A from explicit context"
+    provider: "anthropic"
+    model_id: "claude-3-haiku-20240307"          # Cheapest cloud engine option
+    fallback_model_id: "gpt-4o-mini"
+    max_tokens: 1024
+    temperature: 0.0
+
+  2:
+    tier_name: "Tier 2 - Moderate Complexity"
+    description: "Summarization, classifications, structured text generation"
+    provider: "openai"
+    model_id: "gpt-4o-mini"                      # Balanced speed/cost optimizer
+    fallback_model_id: "claude-3-5-sonnet-20241022"
+    max_tokens: 2048
+    temperature: 0.2
+
+  3:
+    tier_name: "Tier 3 - High Complexity"
+    description: "Multi-step reasoning, logical judgment calls, creative compilation, complex code execution"
+    provider: "openai"
+    model_id: "gpt-4o"                           # Premier capability tier for zero failure tolerances
+    fallback_model_id: "claude-3-5-sonnet-20241022"
+    max_tokens: 4096
+    temperature: 0.5
+
+# Failover & Runtime Engine Protocols
+runtime_policies:
+  retry_attempts: 3
+  timeout_seconds: 12.0
+  fallback_on_http_codes: [429, 500, 502, 503]
