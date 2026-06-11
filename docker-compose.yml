@@ -1,0 +1,40 @@
+version: '3.8'
+
+services:
+  # Pillar 1: The FastAPI API Edge Proxy Gateway Gateway
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: autopilot_api_gateway
+    ports:
+      - "8000:8000"
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - DATABASE_PATH=/app/data/autopilot_analytics.db
+    volumes:
+      - sqlite_storage_volume:/app/data
+    restart: unless-stopped
+
+  # Pillar 2: The Decoupled Asynchronous Evaluation Consumer Worker
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: autopilot_verification_worker
+    command: python worker_daemon.py
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - DATABASE_PATH=/app/data/autopilot_analytics.db
+    volumes:
+      - sqlite_storage_volume:/app/data
+    depends_on:
+      - api
+    restart: unless-stopped
+
+# Pillar 3: SQLite Storage Engine Volume Target Layer
+volumes:
+  sqlite_storage_volume:
+    driver: local
